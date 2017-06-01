@@ -1,0 +1,68 @@
+#!/bin/sh
+#
+#
+# Detectd whos is master nad whois slave and set hast initial roles
+# this is failover util in case both nodes are shutdown and need to start at same time
+# by: Igor Brandao <igorsca(at)gmail(dot)com
+
+# PROVIDE: scarpd
+# REQUIRE: NETWORKING syslogd hastd
+# RCVAR: scarpd
+
+. /etc/rc.subr
+
+name="scarpd"
+desc="Detects whos master and whos slave"
+rcvar="${name}_enable"
+load_rc_config "${name}"
+
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+
+carps=`/usr/local/bin/xml sel -t -m "//vinterfaces/carp" -v if -n -b /conf/config.xml`
+
+hast_set_state(){
+
+if [ ! -e /var/run/hastctl ]; then
+    sleep 2
+    if [ ! -e /var/run/hastctl ]; then
+	# hastd is not started
+	return 0
+    fi
+fi
+
+# get carp interfaces
+carps=`/usr/local/bin/xml sel -t -m "//vinterfaces/carp" -v if -n -b /conf/config.xml`
+STATE="unknown"
+if [ -n "${carps}" ]; then
+	for if in ${carps}; do
+		STATE=`/sbin/ifconfig ${if} | grep  "carp:" | awk '{ print tolower($2) }'`
+	done
+fi
+
+if [ $STATE == master ]
+then
+	hastctl role primary all
+	/usr/local/sbin/hastswitch start
+
+elif [ $STATE == backup ]
+then
+	hastctl role secondary all
+	/usr/local/sbin/hastswitch stop
+fi
+}
+
+
+scarpd_start()
+{
+	hast_set_state
+}
+
+scarpd_stop()
+{
+	hastctl role init all
+}
+
+load_rc_config $name
+run_rc_command "$1"
+

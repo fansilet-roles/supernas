@@ -1,0 +1,14 @@
+#!/bin/bash
+echo "What disk do you want"
+echo "to wipe? For example - ada1 :"
+read disk
+echo "OK, in 10 seconds I will destroy all data on $disk!"
+echo "Press CTRL+C to abort!"
+sleep 10
+diskinfo ${disk} | while read disk sectorsize size sectors other
+do
+    # Delete MBR, GPT Primary, ZFS(L0L1)/other partition table.
+    /bin/dd if=/dev/zero of=/dev/${disk} bs=${sectorsize} count=8192
+    # Delete GEOM metadata, GPT Secondary(L2L3).
+    /bin/dd if=/dev/zero of=/dev/${disk} bs=${sectorsize} oseek=$(expr $sectors - 8192) count=8192
+done

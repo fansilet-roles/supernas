@@ -1,0 +1,145 @@
+#!/bin/sh
+
+# Part of NAS4Free (http://www.nas4free.org).
+# Copyright (c) 2012-2016 The NAS4Free Project <info@nas4free.org>.
+# All rights reserved.
+# Modified by: Igor Brandao <igorsca(at)gmail(dot)com
+#
+
+. /etc/configxml.subr
+
+mountbase=/mnt
+log="user.notice"
+name="hastswitch"
+
+PREEMPT=`/sbin/sysctl -q -n net.inet.carp.preempt`
+
+case "$1" in
+start)
+	# import ZFS pool
+	hast_pools=$(xml sel -t -m "//disk" --if "type='HAST'" --if "fstype='zfs'" -v name -n -b ${configxml_file})
+	for pools in $hast_pools
+	do
+		/usr/bin/logger -p $log -t $name "Import ZFS pool $pools."
+		/sbin/zpool import -f "$pools"
+		if [ $? -ne 0 ]
+		then
+			zfs mount $pools
+		fi
+	done
+	#/etc/rc.d/zfs onestart
+
+	# mount GPT/UFS
+	/usr/local/bin/xml sel -t \
+		-m "//mounts/*[type='hvol']" \
+			-v "concat(mdisk, ' ', partition, ' ', devicespecialfile, ' ', fstype, ' ', sharename)" \
+			-v "concat(' ', accessrestrictions/mode, ' ', accessrestrictions/owner, ' ', accessrestrictions/group)" \
+			-i "count(readonly) > 0" -o " -r" -b \
+			-n \
+		-b \
+	    ${configxml_file} | /usr/local/bin/xml unesc | \
+	while read _mdisk _partition _device _fs _share _mode _owner _group _ro; do
+		if [ -n "$_device" -a -c "$_device" ]; then
+		    /usr/bin/logger -p $log -t $name "Mount ${_device} (${_mdisk}${_partition}) on ${mountbase}/${_share}."
+		    /sbin/fsck -p -y -t "${_fs}" "${_device}"
+		    /bin/mkdir -p "${mountbase}/${_share}"
+		    /sbin/mount -t ufs ${_ro} "${_device}" "${mountbase}/${_share}"
+		    /bin/chmod "${_mode}" "${mountbase}/${_share}"
+		    /usr/sbin/chown "${_owner}" "${mountbase}/${_share}"
+		    /usr/bin/chgrp "${_group}" "${mountbase}/${_share}"
+		fi
+	done
+
+	# start services
+	/etc/rc.d/samba start
+	/etc/rc.d/netatalk start
+
+	/etc/rc.d/nfsuserd start
+	/etc/rc.d/rpcbind start
+	/etc/rc.d/mountd start
+	/etc/rc.d/nfsd start
+	/etc/rc.d/statd start
+	/etc/rc.d/lockd start
+	/etc/rc.d/transmission start
+	#/usr/local/etc/rc.d/plexmediaserver start
+	/usr/local/etc/rc.d/plexmediaserver_plexpass start
+	/usr/local/etc/rc.d/sonarr start
+	/usr/local/etc/rc.d/couchpotato start
+
+
+	/etc/rc.d/mdnsresponder forcerestart
+	;;
+
+stop)
+	# stop services
+	/etc/rc.d/samba forcestop
+	/etc/rc.d/netatalk forcestop
+
+	/etc/rc.d/lockd forcestop
+	/etc/rc.d/statd forcestop
+	/etc/rc.d/nfsd forcestop
+	/etc/rc.d/mountd forcestop
+	/etc/rc.d/rpcbind forcestop
+	/etc/rc.d/nfsuserd forcestop
+	/etc/rc.d/transmission forcestop
+	#/usr/local/etc/rc.d/plexmediaserver forcestop
+	/usr/local/etc/rc.d/plexmediaserver_plexpass forcestop
+	/usr/local/etc/rc.d/sonarr forcestop
+	#/usr/local/etc/rc.d/couchpotato forcestop
+	kill -9 `cat /usr/local/CouchPotatoServer/data/couchpotato.pid` 
+
+	/etc/rc.d/mdnsresponder forcerestart
+
+	# unmount GPT/UFS
+	/usr/local/bin/xml sel -t \
+		-m "//mounts/*[type='hvol']" \
+			-v "concat(mdisk, ' ', partition, ' ', devicespecialfile, ' ', fstype, ' ', sharename)" \
+			-n \
+		-b \
+	    ${configxml_file} | /usr/local/bin/xml unesc | \
+	while read _mdisk _partition _device _fs _share; do
+		if [ -n "$_device" ]; then
+		    /usr/bin/logger -p $log -t $name "Unmount ${_device} (${_mdisk}${_partition}) from ${mountbase}/${_share}."
+		    /sbin/umount -f "${mountbase}/${_share}" 2>/dev/null
+		fi
+	done
+
+	# export ZFS pool
+	mountpath=$(xml sel -t -m "//iscsitarget" -v mediadirectory -n -b ${configxml_file})
+	hast_pools=$(xml sel -t -m "//disk" --if "type='HAST'" --if "fstype='zfs'" -v name -n -b ${configxml_file})
+	for pools in $hast_pools
+	do
+		/usr/bin/logger -p $log -t $name "Export ZFS pool $pools."
+		zfs umount -f $pools
+		/sbin/zpool export "$pools"
+		
+	done
+	;;
+
+shutdown)
+	# state to backup
+	/usr/local/bin/xml sel -t \
+		-m "//vinterfaces/carp" \
+			-v "if" \
+			-n \
+		-b \
+	    ${configxml_file} | /usr/local/bin/xml unesc | \
+	while read _if; do
+		if [ "${PREEMPT}" = "0" -a  -n "$_if" ]; then
+		    /usr/bin/logger -p $log -t $name "Change ${_if} state to BACKUP."
+		    /sbin/ifconfig "${_if}" state backup 2>/dev/null
+		    /bin/sleep 1
+		elif [ "${PREEMPT}" != "0" -a  -n "$_if" ]; then
+		    /usr/bin/logger -p $log -t $name "Change ${_if} state to INIT."
+		    /sbin/ifconfig "${_if}" down 2>/dev/null
+		    /bin/sleep 1
+		fi
+	done
+	/bin/sleep 5
+	/etc/rc.d/zfs stop
+	;;
+
+*)
+	logger -p $log -t $name "Unsupported command $1."
+	;;
+esac

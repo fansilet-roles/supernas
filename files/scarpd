@@ -35,8 +35,8 @@ fi
 carps=`/usr/local/bin/xml sel -t -m "//vinterfaces/carp" -v if -n -b /conf/config.xml`
 STATE="unknown"
 if [ -n "${carps}" ]; then
-	for if in ${carps}; do
-		STATE=`/sbin/ifconfig ${if} | grep  "carp:" | awk '{ print tolower($2) }'`
+	for iface in ${carps}; do
+		STATE=`/sbin/ifconfig ${iface} | grep  "carp:" | awk '{ print tolower($2) }'`
 	done
 fi
 
